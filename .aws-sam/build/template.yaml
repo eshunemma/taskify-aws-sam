@@ -1,0 +1,848 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Taskify
+Transform:
+- AWS::Serverless-2016-10-31
+Resources:
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: TaskifyUserPool
+      UsernameAttributes:
+      - email
+      AutoVerifiedAttributes:
+      - email
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+        InviteMessageTemplate:
+          EmailMessage: "Hello {username}, \nYour account has been created. You can\
+            \ sign in using the following credentials:\nUsername: {username} Temporary\
+            \ Password: {####}.\nPlease reset your password after signing in using\
+            \ this link: `<a href=\"${\"https://main.d1dz6uduz5w2pj.amplifyapp.com/\"\
+            }\">Click here</a>` Make sure to subscribe to the the Subscriptions.\n\
+            Best regards, Taskify Team\n"
+          EmailSubject: Welcome to Taskify.
+      Schema:
+      - Name: email
+        AttributeDataType: String
+        Required: true
+      - Name: name
+        AttributeDataType: String
+        Required: true
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId:
+        Ref: CognitoUserPool
+      ClientName: TaskifyAppClient
+      GenerateSecret: true
+      AllowedOAuthFlows:
+      - implicit
+      AllowedOAuthScopes:
+      - email
+      - openid
+      - profile
+      AllowedOAuthFlowsUserPoolClient: true
+      CallbackURLs:
+      - https://main.d1dz6uduz5w2pj.amplifyapp.com/dashboard
+      LogoutURLs:
+      - https://main.d1dz6uduz5w2pj.amplifyapp.com/signout
+  CognitoIdentityPool:
+    Type: AWS::Cognito::IdentityPool
+    Properties:
+      IdentityPoolName: TaskIdentityPool
+      AllowUnauthenticatedIdentities: false
+      CognitoIdentityProviders:
+      - ProviderName:
+          Fn::GetAtt:
+          - CognitoUserPool
+          - ProviderName
+        ClientId:
+          Ref: CognitoUserPoolClient
+  CognitoUserOnboardingLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: LambdaCognitoPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - cognito-idp:AdminCreateUser
+            - cognito-idp:AdminSetUserPassword
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - dynamodb:*
+            Resource: '*'
+  CognitoUserOnboardingLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: CognitoUserOnboarding
+      Handler: src/handlers/cognito/createUser.lambdaHandler
+      Runtime: nodejs18.x
+      Role:
+        Fn::GetAtt:
+        - CognitoUserOnboardingLambdaRole
+        - Arn
+      Environment:
+        Variables:
+          USER_POOL_ID:
+            Ref: CognitoUserPool
+      CodeUri: CognitoUserOnboardingLambdaFunction
+    Metadata:
+      SamResourceId: CognitoUserOnboardingLambdaFunction
+  UserTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Users
+      AttributeDefinitions:
+      - AttributeName: user_id
+        AttributeType: S
+      KeySchema:
+      - AttributeName: user_id
+        KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+  TaskTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Tasks
+      AttributeDefinitions:
+      - AttributeName: task_id
+        AttributeType: S
+      KeySchema:
+      - AttributeName: task_id
+        KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+  TaskAssignmentQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: TaskAssignmentQueue
+  TaskDeadlineExpiredQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: TaskDeadlineExpiredQueue
+  TasksAssignmentNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: TasksAssignmentNotificationTopic
+  TasksDeadlineNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: TasksDeadlineNotificationTopic
+  ClosedTasksNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: ClosedTasksNotificationTopic
+  ReopenedTasksNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: ReopenedTasksNotificationTopic
+  TaskifyTopicsExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Policies:
+      - PolicyName: LambdaSNSPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - sns:Subscribe
+            - sns:ListSubscriptions
+            - sns:GetTopicAttributes
+            - sns:SetSubscriptionAttributes
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: '*'
+  TaskifyAssignmentNotificationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/handlers/sns-notifications/task-assignment.lambdaHandler
+      Role:
+        Fn::GetAtt:
+        - TaskifyTopicsExecutionRole
+        - Arn
+      Runtime: nodejs18.x
+      Architectures:
+      - x86_64
+      Environment:
+        Variables:
+          SNS_ARN:
+            Ref: TasksAssignmentNotificationTopic
+      CodeUri: TaskifyAssignmentNotificationFunction
+    Metadata:
+      SamResourceId: TaskifyAssignmentNotificationFunction
+  TaskifyDeadlineNotificationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/handlers/sns-notifications/task-deadline.lambdaHandler
+      Role:
+        Fn::GetAtt:
+        - TaskifyTopicsExecutionRole
+        - Arn
+      Runtime: nodejs18.x
+      Architectures:
+      - x86_64
+      Environment:
+        Variables:
+          SNS_ARN:
+            Ref: TasksDeadlineNotificationTopic
+      CodeUri: TaskifyDeadlineNotificationFunction
+    Metadata:
+      SamResourceId: TaskifyDeadlineNotificationFunction
+  ReOpenTaskifyNotificationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/handlers/sns-notifications/reopen-task.lambdaHandler
+      Role:
+        Fn::GetAtt:
+        - TaskifyTopicsExecutionRole
+        - Arn
+      Runtime: nodejs18.x
+      Architectures:
+      - x86_64
+      Environment:
+        Variables:
+          SNS_ARN:
+            Ref: ReopenedTasksNotificationTopic
+      CodeUri: ReOpenTaskifyNotificationFunction
+    Metadata:
+      SamResourceId: ReOpenTaskifyNotificationFunction
+  ClosedTaskifyNotificationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/handlers/sns-notifications/closed-task.lambdaHandler
+      Role:
+        Fn::GetAtt:
+        - TaskifyTopicsExecutionRole
+        - Arn
+      Runtime: nodejs18.x
+      Architectures:
+      - x86_64
+      Environment:
+        Variables:
+          SNS_ARN:
+            Ref: ClosedTasksNotificationTopic
+      CodeUri: ClosedTaskifyNotificationFunction
+    Metadata:
+      SamResourceId: ClosedTaskifyNotificationFunction
+  TaskifyExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Policies:
+      - PolicyName: LambdaDynamoPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - dynamodb:*
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - sqs:*
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - sns:*
+            Resource: '*'
+  CreateTaskLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: CreateTaskLambdaFunction
+      Handler: src/handlers/tasks/createTask.lambdaHandler
+      Runtime: nodejs18.x
+      Role:
+        Fn::GetAtt:
+        - TaskifyExecutionRole
+        - Arn
+      Events:
+        PostTasksApi:
+          Type: Api
+          Properties:
+            Path: /tasks
+            Method: POST
+      Environment:
+        Variables:
+          queueUrl:
+            Fn::GetAtt:
+            - TaskAssignmentQueue
+            - QueueUrl
+      CodeUri: CreateTaskLambdaFunction
+    Metadata:
+      SamResourceId: CreateTaskLambdaFunction
+  UpdateTaskLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: UpdateTaskLambdaFunction
+      Handler: src/handlers/tasks/updateTask.lambdaHandler
+      Runtime: nodejs18.x
+      Role:
+        Fn::GetAtt:
+        - TaskifyExecutionRole
+        - Arn
+      Events:
+        PutTasksApi:
+          Type: Api
+          Properties:
+            Path: /tasks
+            Method: PUT
+      CodeUri: UpdateTaskLambdaFunction
+    Metadata:
+      SamResourceId: UpdateTaskLambdaFunction
+  UpdateTaskStatusLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: UpdateTaskStatusLambdaFunction
+      Handler: src/handlers/tasks/updateTaskStatus.lambdaHandler
+      Runtime: nodejs18.x
+      Role:
+        Fn::GetAtt:
+        - TaskifyExecutionRole
+        - Arn
+      Environment:
+        Variables:
+          TASKS_ReOpen_SNS_ARN:
+            Ref: ReopenedTasksNotificationTopic
+      Events:
+        PutTasksApi:
+          Type: Api
+          Properties:
+            Path: /update-status
+            Method: PUT
+      CodeUri: UpdateTaskStatusLambdaFunction
+    Metadata:
+      SamResourceId: UpdateTaskStatusLambdaFunction
+  listTasksLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: listTasksLambdaFunction
+      Handler: src/handlers/tasks/getAllTask.lambdaHandler
+      Runtime: nodejs18.x
+      Role:
+        Fn::GetAtt:
+        - TaskifyExecutionRole
+        - Arn
+      Events:
+        GetTasksApi:
+          Type: Api
+          Properties:
+            Path: /tasks
+            Method: GET
+      CodeUri: listTasksLambdaFunction
+    Metadata:
+      SamResourceId: listTasksLambdaFunction
+  getUserTasksLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: getUserTasksLambdaFunction
+      Handler: src/handlers/tasks/getUserTasks.lambdaHandler
+      Runtime: nodejs18.x
+      Role:
+        Fn::GetAtt:
+        - TaskifyExecutionRole
+        - Arn
+      Events:
+        GetTasksApi:
+          Type: Api
+          Properties:
+            Path: /user-tasks/{user_email}
+            Method: GET
+      CodeUri: getUserTasksLambdaFunction
+    Metadata:
+      SamResourceId: getUserTasksLambdaFunction
+  SQSExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Policies:
+      - PolicyName: LambdaSQSPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+            - sqs:GetQueueAttributes
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - sns:*
+            Resource: '*'
+  TriggerTaskAssignmentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: TriggerTaskAssignmentFunction
+      Handler: src/handlers/utils/processAssignmentSqs.lambdaHandler
+      Runtime: nodejs18.x
+      Role:
+        Fn::GetAtt:
+        - SQSExecutionRole
+        - Arn
+      Environment:
+        Variables:
+          SNS_ARN:
+            Ref: TasksAssignmentNotificationTopic
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue:
+              Fn::GetAtt:
+              - TaskAssignmentQueue
+              - Arn
+            BatchSize: 10
+            Enabled: true
+      CodeUri: TriggerTaskAssignmentFunction
+    Metadata:
+      SamResourceId: TriggerTaskAssignmentFunction
+  EventBridgeRule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: rate(5 minutes)
+      Targets:
+      - Id: NotifyDeadlineLambdaTarget
+        Arn:
+          Fn::GetAtt:
+          - NotifyDeadlineLambda
+          - Arn
+  NotifyDeadlineLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Fn::GetAtt:
+        - NotifyDeadlineLambda
+        - Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+  NotifyDeadlineLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: NotifyDeadlineLambda
+      Handler: src/handlers/utils/processOneHourDeadline.lambdaHandler
+      Runtime: nodejs18.x
+      Policies:
+      - DynamoDBReadPolicy:
+          TableName: Tasks
+      - SNSPublishMessagePolicy:
+          TopicName: TasksDeadlineNotificationTopic
+      Environment:
+        Variables:
+          TASKS_DEADLINE_TOPIC_ARN:
+            Ref: TasksDeadlineNotificationTopic
+      CodeUri: NotifyDeadlineLambda
+    Metadata:
+      SamResourceId: NotifyDeadlineLambda
+  DeadlineHitRule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: rate(1 minute)
+      Targets:
+      - Id: DeadlineHitLambdaTarget
+        Arn:
+          Fn::GetAtt:
+          - DeadlineHitLambda
+          - Arn
+  DeadlineHitLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Fn::GetAtt:
+        - DeadlineHitLambda
+        - Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+  DeadlineHitLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: DeadlineHitLambda
+      Handler: src/handlers/utils/deadlineHit_helpers/processDeadlineHit.lambdaHandler
+      Runtime: nodejs18.x
+      Policies:
+      - DynamoDBReadPolicy:
+          TableName: Tasks
+      - SQSSendMessagePolicy:
+          QueueName:
+            Fn::GetAtt:
+            - TaskDeadlineExpiredQueue
+            - QueueName
+      Environment:
+        Variables:
+          queueUrl:
+            Fn::GetAtt:
+            - TaskDeadlineExpiredQueue
+            - QueueUrl
+      CodeUri: DeadlineHitLambda
+    Metadata:
+      SamResourceId: DeadlineHitLambda
+  SFDeadlineHitExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: states.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: SFLambdaInvokeDH
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - dynamodb:*
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - sns:*
+            Resource: '*'
+  TaskifyDeadlineHitStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: TaskifyDeadlineHitStateMachine
+      RoleArn:
+        Fn::GetAtt:
+        - SFDeadlineHitExecutionRole
+        - Arn
+      DefinitionString:
+        Fn::Sub: "{\n  \"Comment\": \"Process expired tasks\",\n  \"StartAt\": \"\
+          Parallel\",\n  \"States\": {\n    \"Parallel\": {\n      \"Type\": \"Parallel\"\
+          ,\n      \"Branches\": [\n        {\n          \"StartAt\": \"UpdateTaskStatus\"\
+          ,\n          \"States\": {\n            \"UpdateTaskStatus\": {\n      \
+          \        \"Type\": \"Task\",\n              \"Resource\": \"arn:aws:states:::dynamodb:updateItem\"\
+          ,\n              \"Parameters\": {\n                \"TableName\": \"Tasks\"\
+          ,\n                \"Key\": {\n                  \"task_id\": {\n      \
+          \              \"S.$\": \"$.task_id\"\n                  }\n           \
+          \     },\n                \"UpdateExpression\": \"SET #status = :expired\"\
+          ,\n                \"ExpressionAttributeNames\": {\n                  \"\
+          #status\": \"status\"\n                },\n                \"ExpressionAttributeValues\"\
+          : {\n                  \":expired\": {\n                    \"S\": \"expired\"\
+          \n                  }\n                }\n              },\n           \
+          \   \"End\": true\n            }\n          }\n        },\n        {\n \
+          \         \"StartAt\": \"NotifyViaSNS\",\n          \"States\": {\n    \
+          \        \"NotifyViaSNS\": {\n              \"Type\": \"Task\",\n      \
+          \        \"Resource\": \"arn:aws:states:::sns:publish\",\n             \
+          \ \"Parameters\": {\n                \"TopicArn\": \"arn:aws:sns:eu-central-1:205930614431:ClosedTasksNotificationTopic\"\
+          ,\n                \"Message.$\": \"$.Message\",\n                \"Subject\"\
+          : \"Task Expired - Notification\",\n                \"MessageAttributes\"\
+          : {\n                  \"eventType\": {\n                    \"DataType\"\
+          : \"String\",\n                    \"StringValue.$\": \"$.assigned_user_email\"\
+          \n                  }\n                }\n              },\n           \
+          \   \"End\": true\n            }\n          }\n        }\n      ],\n   \
+          \   \"End\": true\n    }\n  }\n}\n"
+  TriggerDeadlineHitSQSFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: TriggerDeadlineHitSQSFunction
+      Handler: src/handlers/utils/deadlineHit_helpers/triggerStepFunction-deadline.lambdaHandler
+      Runtime: nodejs18.x
+      Policies:
+      - StepFunctionsExecutionPolicy:
+          StateMachineName: TaskifyDeadlineHitStateMachine
+      - SQSPollerPolicy:
+          QueueName:
+            Fn::GetAtt:
+            - TaskDeadlineExpiredQueue
+            - QueueName
+      Environment:
+        Variables:
+          stateMachineArn:
+            Ref: TaskifyDeadlineHitStateMachine
+          SNS_topicARN:
+            Ref: ClosedTasksNotificationTopic
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue:
+              Fn::GetAtt:
+              - TaskDeadlineExpiredQueue
+              - Arn
+            BatchSize: 10
+            Enabled: true
+      CodeUri: TriggerDeadlineHitSQSFunction
+    Metadata:
+      SamResourceId: TriggerDeadlineHitSQSFunction
+  StepFunctionsExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: states.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: StepFunctionsLambdaInvoke
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - lambda:InvokeFunction
+            Resource:
+            - Fn::GetAtt:
+              - CognitoUserOnboardingLambdaFunction
+              - Arn
+            - Fn::GetAtt:
+              - TaskifyAssignmentNotificationFunction
+              - Arn
+            - Fn::GetAtt:
+              - TaskifyDeadlineNotificationFunction
+              - Arn
+            - Fn::GetAtt:
+              - ReOpenTaskifyNotificationFunction
+              - Arn
+            - Fn::GetAtt:
+              - ClosedTaskifyNotificationFunction
+              - Arn
+            - Fn::GetAtt:
+              - TriggerDeadlineHitSQSFunction
+              - Arn
+            - Fn::GetAtt:
+              - TriggerUserOnboardingSFLambdaFunction
+              - Arn
+          - Effect: Allow
+            Action:
+            - dynamodb:*
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - sns:*
+            Resource: '*'
+  TaskifyOnboardingStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: TaskifyWorkflow
+      RoleArn:
+        Fn::GetAtt:
+        - StepFunctionsExecutionRole
+        - Arn
+      DefinitionString:
+        Fn::Sub: "{\n  \"Comment\": \"Taskify workflow state machine\",\n  \"StartAt\"\
+          : \"Create User\",\n  \"States\": {\n    \"Create User\": {\n      \"Type\"\
+          : \"Task\",\n      \"Resource\": \"arn:aws:states:::lambda:invoke\",\n \
+          \     \"Parameters\": {\n        \"FunctionName\": \"${CognitoUserOnboardingLambdaFunction.Arn}\"\
+          ,\n        \"Payload.$\": \"$\"\n      },\n      \"Retry\": [\n        {\n\
+          \          \"ErrorEquals\": [\n            \"Lambda.ServiceException\",\n\
+          \            \"Lambda.AWSLambdaException\",\n            \"Lambda.SdkClientException\"\
+          ,\n            \"Lambda.TooManyRequestsException\"\n          ],\n     \
+          \     \"IntervalSeconds\": 1,\n          \"MaxAttempts\": 3,\n         \
+          \ \"BackoffRate\": 2,\n          \"JitterStrategy\": \"FULL\"\n        }\n\
+          \      ],\n      \"Next\": \"Parallel\"\n    },\n    \"Parallel\": {\n \
+          \     \"Type\": \"Parallel\",\n      \"End\": true,\n      \"Branches\"\
+          : [\n        {\n          \"StartAt\": \"Task Assignment\",\n          \"\
+          States\": {\n            \"Task Assignment\": {\n              \"Type\"\
+          : \"Task\",\n              \"Resource\": \"arn:aws:states:::lambda:invoke\"\
+          ,\n              \"Parameters\": {\n                \"FunctionName\": \"\
+          ${TaskifyAssignmentNotificationFunction.Arn}\",\n                \"Payload.$\"\
+          : \"$\"\n              },\n              \"Retry\": [\n                {\n\
+          \                  \"ErrorEquals\": [\n                    \"Lambda.ServiceException\"\
+          ,\n                    \"Lambda.AWSLambdaException\",\n                \
+          \    \"Lambda.SdkClientException\",\n                    \"Lambda.TooManyRequestsException\"\
+          \n                  ],\n                  \"IntervalSeconds\": 1,\n    \
+          \              \"MaxAttempts\": 3,\n                  \"BackoffRate\": 2,\n\
+          \                  \"JitterStrategy\": \"FULL\"\n                }\n   \
+          \           ],\n              \"End\": true\n            }\n          }\n\
+          \        },\n        {\n          \"StartAt\": \"Deadline\",\n         \
+          \ \"States\": {\n            \"Deadline\": {\n              \"Type\": \"\
+          Task\",\n              \"Resource\": \"arn:aws:states:::lambda:invoke\"\
+          ,\n              \"Parameters\": {\n                \"FunctionName\": \"\
+          ${TaskifyDeadlineNotificationFunction.Arn}\",\n                \"Payload.$\"\
+          : \"$\"\n              },\n              \"Retry\": [\n                {\n\
+          \                  \"ErrorEquals\": [\n                    \"Lambda.ServiceException\"\
+          ,\n                    \"Lambda.AWSLambdaException\",\n                \
+          \    \"Lambda.SdkClientException\",\n                    \"Lambda.TooManyRequestsException\"\
+          \n                  ],\n                  \"IntervalSeconds\": 1,\n    \
+          \              \"MaxAttempts\": 3,\n                  \"BackoffRate\": 2,\n\
+          \                  \"JitterStrategy\": \"FULL\"\n                }\n   \
+          \           ],\n              \"End\": true\n            }\n          }\n\
+          \        },\n        {\n          \"StartAt\": \"Reopen Task\",\n      \
+          \    \"States\": {\n            \"Reopen Task\": {\n              \"Type\"\
+          : \"Task\",\n              \"Resource\": \"arn:aws:states:::lambda:invoke\"\
+          ,\n              \"Parameters\": {\n                \"FunctionName\": \"\
+          ${ReOpenTaskifyNotificationFunction.Arn}\",\n                \"Payload.$\"\
+          : \"$\"\n              },\n              \"Retry\": [\n                {\n\
+          \                  \"ErrorEquals\": [\n                    \"Lambda.ServiceException\"\
+          ,\n                    \"Lambda.AWSLambdaException\",\n                \
+          \    \"Lambda.SdkClientException\",\n                    \"Lambda.TooManyRequestsException\"\
+          \n                  ],\n                  \"IntervalSeconds\": 1,\n    \
+          \              \"MaxAttempts\": 3,\n                  \"BackoffRate\": 2,\n\
+          \                  \"JitterStrategy\": \"FULL\"\n                }\n   \
+          \           ],\n              \"End\": true\n            }\n          }\n\
+          \        },\n        {\n          \"StartAt\": \"Closed Tasks\",\n     \
+          \     \"States\": {\n            \"Closed Tasks\": {\n              \"Type\"\
+          : \"Task\",\n              \"Resource\": \"arn:aws:states:::lambda:invoke\"\
+          ,\n              \"Parameters\": {\n                \"FunctionName\": \"\
+          ${ClosedTaskifyNotificationFunction.Arn}\",\n                \"Payload.$\"\
+          : \"$\"\n              },\n              \"Retry\": [\n                {\n\
+          \                  \"ErrorEquals\": [\n                    \"Lambda.ServiceException\"\
+          ,\n                    \"Lambda.AWSLambdaException\",\n                \
+          \    \"Lambda.SdkClientException\",\n                    \"Lambda.TooManyRequestsException\"\
+          \n                  ],\n                  \"IntervalSeconds\": 1,\n    \
+          \              \"MaxAttempts\": 3,\n                  \"BackoffRate\": 2,\n\
+          \                  \"JitterStrategy\": \"FULL\"\n                }\n   \
+          \           ],\n              \"End\": true\n            }\n          }\n\
+          \        }\n      ]\n    }\n  }\n}\n"
+  TaskifyApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: TaskifyWorkflowApi
+      Description: API Gateway for Taskify Workflow State Machine
+  TaskifyApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId:
+        Ref: TaskifyApi
+      ParentId:
+        Fn::GetAtt:
+        - TaskifyApi
+        - RootResourceId
+      PathPart: workflow
+  TaskifyApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId:
+        Ref: TaskifyApi
+      ResourceId:
+        Ref: TaskifyApiResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS
+        IntegrationHttpMethod: POST
+        Uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:states:action/StartExecution
+        Credentials:
+          Fn::GetAtt:
+          - ApiGatewayStepFunctionsRole
+          - Arn
+        RequestTemplates:
+          application/json: "{\n  \"input\": \"$util.escapeJavaScript($input.body)\"\
+            ,\n  \"stateMachineArn\": !GetAtt TaskifyOnboardingStateMachine.Arn\n\
+            }\n"
+        IntegrationResponses:
+        - StatusCode: '200'
+      MethodResponses:
+      - StatusCode: '200'
+  ApiGatewayStepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: apigateway.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: StepFunctionsStartExecution
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - states:StartExecution
+            Resource:
+              Ref: TaskifyOnboardingStateMachine
+  TaskifyApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+    - TaskifyApiMethod
+    Properties:
+      RestApiId:
+        Ref: TaskifyApi
+  TaskifyApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      DeploymentId:
+        Ref: TaskifyApiDeployment
+      RestApiId:
+        Ref: TaskifyApi
+      StageName: prod
+  TriggerUserOnboardingSFLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: TriggerUserOnboardingSFLambdaFunction
+      Handler: src/handlers/cognito/triggerUserOnboarding.lambdaHandler
+      Runtime: nodejs18.x
+      Role:
+        Fn::GetAtt:
+        - StepFunctionsExecutionRole
+        - Arn
+      Events:
+        PostUsersApi:
+          Type: Api
+          Properties:
+            Path: /user-onboarding
+            Method: POST
+      Environment:
+        Variables:
+          stateMachineArn:
+            Ref: TaskifyOnboardingStateMachine
+      CodeUri: TriggerUserOnboardingSFLambdaFunction
+    Metadata:
+      SamResourceId: TriggerUserOnboardingSFLambdaFunction
