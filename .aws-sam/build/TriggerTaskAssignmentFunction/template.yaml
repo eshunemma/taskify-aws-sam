@@ -610,7 +610,6 @@ Resources:
                   - !GetAtt ReOpenTaskifyNotificationFunction.Arn
                   - !GetAtt ClosedTaskifyNotificationFunction.Arn
                   - !GetAtt TriggerDeadlineHitSQSFunction.Arn
-                  - !GetAtt TriggerUserOnboardingSFLambdaFunction.Arn
               - Effect: Allow
                 Action:
                   - dynamodb:*
@@ -845,6 +844,25 @@ Resources:
       StageName: prod
 
   # Lambda Function to trigger User Onboarding
+  # TriggerCreateUserExecutionRole:
+  #   Type: AWS::IAM::Role
+  #   Properties:
+  #     AssumeRolePolicyDocument:
+  #       Version: "2012-10-17"
+  #       Statement:
+  #         - Effect: Allow
+  #           Principal:
+  #             Service: states.amazonaws.com
+  #           Action: sts:AssumeRole
+  #     Policies:
+  #       - PolicyName: SFCreateUserLambdaInvoke
+  #         PolicyDocument:
+  #           Version: "2012-10-17"
+  #           Statement:
+  #             - Effect: Allow
+  #               Action:
+  #                 - lambda:InvokeFunction
+  #               Resource: "*"
 
   TriggerUserOnboardingSFLambdaFunction:
     Type: AWS::Serverless::Function
@@ -852,7 +870,9 @@ Resources:
       FunctionName: TriggerUserOnboardingSFLambdaFunction
       Handler: src/handlers/cognito/triggerUserOnboarding.lambdaHandler
       Runtime: nodejs18.x
-      Role: !GetAtt StepFunctionsExecutionRole.Arn
+      Policies:
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: TaskifyOnboardingStateMachine
       Events:
         PostUsersApi:
           Type: Api

@@ -662,9 +662,6 @@ Resources:
             - Fn::GetAtt:
               - TriggerDeadlineHitSQSFunction
               - Arn
-            - Fn::GetAtt:
-              - TriggerUserOnboardingSFLambdaFunction
-              - Arn
           - Effect: Allow
             Action:
             - dynamodb:*
@@ -829,10 +826,9 @@ Resources:
       FunctionName: TriggerUserOnboardingSFLambdaFunction
       Handler: src/handlers/cognito/triggerUserOnboarding.lambdaHandler
       Runtime: nodejs18.x
-      Role:
-        Fn::GetAtt:
-        - StepFunctionsExecutionRole
-        - Arn
+      Policies:
+      - StepFunctionsExecutionPolicy:
+          StateMachineName: TaskifyOnboardingStateMachine
       Events:
         PostUsersApi:
           Type: Api

@@ -6,7 +6,7 @@ const dynamodb = new AWS.DynamoDB.DocumentClient();
 
 export const lambdaHandler = async (event) => {
   try {
-    const { email, name, role, temporaryPassword = "TempPass123!" } = event.input;
+    const { email, name, role, temporaryPassword = "TempPass123!" } = event;
 
     const createUserResponse = await cognito
       .adminCreateUser({
