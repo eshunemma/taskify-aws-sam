@@ -4,6 +4,14 @@ Description: >-
 Transform:
   - AWS::Serverless-2016-10-31
 
+Globals:
+  Api:
+    Cors:
+      AllowMethods: "'*'"
+      AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+      AllowOrigin: "'*'"
+      AllowCredentials: "'true'"
+
 Resources:
   # Cognito
   CognitoUserPool:
@@ -25,7 +33,7 @@ Resources:
             Username: {username}
             Temporary Password: {####}.
 
-            Please reset your password after signing in using this link: `<a href="${"https://main.d1dz6uduz5w2pj.amplifyapp.com/"}">Click here</a>`
+            Please reset your password after signing in using this link: <a href="https://main.d1dz6uduz5w2pj.amplifyapp.com/">Click here</a>
             Make sure to subscribe to the the Subscriptions.
 
             Best regards,
@@ -39,6 +47,13 @@ Resources:
         - Name: name
           AttributeDataType: String
           Required: true
+        - Name: role
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+          StringAttributeConstraints:
+            MaxLength: "256"
+            MinLength: "1"
 
   CognitoUserPoolClient:
     Type: AWS::Cognito::UserPoolClient
@@ -305,6 +320,9 @@ Resources:
           Properties:
             Path: /tasks
             Method: PUT
+      Environment:
+        Variables:
+          TASKS_ReOpen_SNS_ARN: !Ref ReopenedTasksNotificationTopic
 
   UpdateTaskStatusLambdaFunction:
     Type: AWS::Serverless::Function
@@ -844,26 +862,6 @@ Resources:
       StageName: prod
 
   # Lambda Function to trigger User Onboarding
-  # TriggerCreateUserExecutionRole:
-  #   Type: AWS::IAM::Role
-  #   Properties:
-  #     AssumeRolePolicyDocument:
-  #       Version: "2012-10-17"
-  #       Statement:
-  #         - Effect: Allow
-  #           Principal:
-  #             Service: states.amazonaws.com
-  #           Action: sts:AssumeRole
-  #     Policies:
-  #       - PolicyName: SFCreateUserLambdaInvoke
-  #         PolicyDocument:
-  #           Version: "2012-10-17"
-  #           Statement:
-  #             - Effect: Allow
-  #               Action:
-  #                 - lambda:InvokeFunction
-  #               Resource: "*"
-
   TriggerUserOnboardingSFLambdaFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -882,3 +880,17 @@ Resources:
       Environment:
         Variables:
           stateMachineArn: !Ref TaskifyOnboardingStateMachine
+
+  GetAllUsersLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: GetAllUsersLambdaFunction
+      Handler: src/handlers/cognito/getAllUsers.lambdaHandler
+      Runtime: nodejs18.x
+      Role: !GetAtt TaskifyExecutionRole.Arn
+      Events:
+        GetUsersApi:
+          Type: Api
+          Properties:
+            Path: /users
+            Method: GET

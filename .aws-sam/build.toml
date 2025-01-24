@@ -7,6 +7,6 @@ architecture = "x86_64"
 handler = "src/handlers/cognito/createUser.lambdaHandler"
 manifest_hash = "8d6347e50efd18f6e88ac0dd97b15a03"
 packagetype = "Zip"
-functions = ["CognitoUserOnboardingLambdaFunction", "TaskifyAssignmentNotificationFunction", "TaskifyDeadlineNotificationFunction", "ReOpenTaskifyNotificationFunction", "ClosedTaskifyNotificationFunction", "CreateTaskLambdaFunction", "UpdateTaskLambdaFunction", "UpdateTaskStatusLambdaFunction", "listTasksLambdaFunction", "getUserTasksLambdaFunction", "TriggerTaskAssignmentFunction", "NotifyDeadlineLambda", "DeadlineHitLambda", "TriggerDeadlineHitSQSFunction", "TriggerUserOnboardingSFLambdaFunction"]
+functions = ["CognitoUserOnboardingLambdaFunction", "TaskifyAssignmentNotificationFunction", "TaskifyDeadlineNotificationFunction", "ReOpenTaskifyNotificationFunction", "ClosedTaskifyNotificationFunction", "CreateTaskLambdaFunction", "UpdateTaskLambdaFunction", "UpdateTaskStatusLambdaFunction", "listTasksLambdaFunction", "getUserTasksLambdaFunction", "TriggerTaskAssignmentFunction", "NotifyDeadlineLambda", "DeadlineHitLambda", "TriggerDeadlineHitSQSFunction", "TriggerUserOnboardingSFLambdaFunction", "GetAllUsersLambdaFunction"]
 
 [layer_build_definitions]

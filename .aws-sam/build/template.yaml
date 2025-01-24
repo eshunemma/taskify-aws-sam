@@ -2,6 +2,13 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: Taskify
 Transform:
 - AWS::Serverless-2016-10-31
+Globals:
+  Api:
+    Cors:
+      AllowMethods: '''*'''
+      AllowHeaders: '''Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'''
+      AllowOrigin: '''*'''
+      AllowCredentials: '''true'''
 Resources:
   CognitoUserPool:
     Type: AWS::Cognito::UserPool
@@ -17,9 +24,9 @@ Resources:
           EmailMessage: "Hello {username}, \nYour account has been created. You can\
             \ sign in using the following credentials:\nUsername: {username} Temporary\
             \ Password: {####}.\nPlease reset your password after signing in using\
-            \ this link: `<a href=\"${\"https://main.d1dz6uduz5w2pj.amplifyapp.com/\"\
-            }\">Click here</a>` Make sure to subscribe to the the Subscriptions.\n\
-            Best regards, Taskify Team\n"
+            \ this link: <a href=\"https://main.d1dz6uduz5w2pj.amplifyapp.com/\">Click\
+            \ here</a> Make sure to subscribe to the the Subscriptions.\nBest regards,\
+            \ Taskify Team\n"
           EmailSubject: Welcome to Taskify.
       Schema:
       - Name: email
@@ -28,6 +35,13 @@ Resources:
       - Name: name
         AttributeDataType: String
         Required: true
+      - Name: role
+        AttributeDataType: String
+        Mutable: true
+        Required: false
+        StringAttributeConstraints:
+          MaxLength: '256'
+          MinLength: '1'
   CognitoUserPoolClient:
     Type: AWS::Cognito::UserPoolClient
     Properties:
@@ -329,6 +343,10 @@ Resources:
           Properties:
             Path: /tasks
             Method: PUT
+      Environment:
+        Variables:
+          TASKS_ReOpen_SNS_ARN:
+            Ref: ReopenedTasksNotificationTopic
       CodeUri: UpdateTaskLambdaFunction
     Metadata:
       SamResourceId: UpdateTaskLambdaFunction
@@ -842,3 +860,22 @@ Resources:
       CodeUri: TriggerUserOnboardingSFLambdaFunction
     Metadata:
       SamResourceId: TriggerUserOnboardingSFLambdaFunction
+  GetAllUsersLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: GetAllUsersLambdaFunction
+      Handler: src/handlers/cognito/getAllUsers.lambdaHandler
+      Runtime: nodejs18.x
+      Role:
+        Fn::GetAtt:
+        - TaskifyExecutionRole
+        - Arn
+      Events:
+        GetUsersApi:
+          Type: Api
+          Properties:
+            Path: /users
+            Method: GET
+      CodeUri: GetAllUsersLambdaFunction
+    Metadata:
+      SamResourceId: GetAllUsersLambdaFunction
